@@ -1,0 +1,16 @@
+[run]
+branch = True
+parallel = True
+disable_warnings = no-data-collected
+include =
+    ./*
+omit =
+    .virtualenv/*
+    venv/*
+    */tests*
+    .git
+    .tox/*
+    conf/*
+
+[report]
+#skip_covered = True
