@@ -15,10 +15,28 @@ def test_prepare_empty_path():
     utils.prepare_path('')
 
 
-def test_file():
-    with tempfile.TemporaryDirectory() as temp_dir:
-        test_file = os.path.join(temp_dir, 'test_file.txt')
-        f = files.File(test_file)
-        f.write('test')
-        assert f.read() == b'test'
+def test_storages_honor_workdir():
+    storage = storages.TemporaryFilesystemStorage()
+    f = storage.open('test_file.txt', 'w+')
+    f.write('test payload')
+    f.close()
 
+    workdir = storage._workdir
+    assert f.name in os.listdir(workdir), 'File is not on the storage workdir'
+
+
+@pytest.mark.parametrize("storage_class", [
+    storages.TemporaryFilesystemStorage,
+])
+def test_file_read_write(storage_class):
+    payload = 'test payload'
+    storage = storage_class()
+    assert not storage.exists('test_file.txt')
+
+    f = storage.open('test_file.txt', 'w+')
+    f.write(payload)
+    f.close()
+    assert storage.exists('test_file.txt')
+
+    f2 = storage.open('test_file.txt')
+    assert f2.read() == payload
