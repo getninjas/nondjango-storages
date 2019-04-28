@@ -1,12 +1,21 @@
 [build-system]
-requires = ["flit"]
+requires = ['flit']
 build-backend = "flit.buildapi"
+
+[tool.flit.metadata.requires-extra]
+test = [
+    "pytest",
+    "pytest-cov",
+]
 
 [tool.flit.metadata]
 dist-name = "nondjango-storages"
 module = "nondjango"
 author = "Alan Justino da Silva"
 author-email = "alan.justino@yahoo.com.br"
+requires = [
+    'boto3',
+]
 classifiers = [
     'Development Status :: 2 - Pre-Alpha',
     'Intended Audience :: Developers',
