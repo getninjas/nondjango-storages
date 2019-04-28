@@ -32,6 +32,13 @@ def test_filesystem_storages_honor_workdir():
 def test_file_read_write(storage_class):
     payload = 'test payload'
     storage = storage_class()
+    try:
+        storage.delete('test_file.txt')
+    except NotImplementedError:
+        raise
+    except Exception:
+        pass
+
     assert not storage.exists('test_file.txt')
 
     with storage.open('test_file.txt', 'w+') as f:
