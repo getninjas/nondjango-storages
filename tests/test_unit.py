@@ -26,12 +26,13 @@ def test_filesystem_storages_honor_workdir():
     assert filename in os.listdir(workdir), 'File is not on the storage workdir'
 
 
-@pytest.mark.parametrize("storage_class", [
-    storages.TemporaryFilesystemStorage,
+@pytest.mark.parametrize("storage_class, storage_params", [
+    (storages.TemporaryFilesystemStorage, {}),
+    (storages.S3Storage, {'workdir': 's3://gn-ninja/storage-test/'}),
 ])
-def test_file_read_write(storage_class):
+def test_file_read_write(storage_class, storage_params):
     payload = 'test payload'
-    storage = storage_class()
+    storage = storage_class(**storage_params)
     try:
         storage.delete('test_file.txt')
     except NotImplementedError:

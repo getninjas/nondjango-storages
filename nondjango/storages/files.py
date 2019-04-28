@@ -13,10 +13,13 @@ logger = logging.getLogger(__name__)
 __escape_decoder = codecs.getdecoder('unicode_escape')
 
 
-class File:
-    def __init__(self, name, storage=None, mode='r'):
+class File(ContextDecorator):
+    def __init__(self, name, storage=None, mode='r', encoding='UTF-8'):
         self.name = name
         self.mode = mode
+        if 'b' not in mode:
+            self.encoding = encoding
+
         self._storage = storage
         self._stream = None
 
@@ -40,7 +43,10 @@ class File:
     def read(self):
         if 'r' not in self.mode and '+' not in self.mode:
             raise IOError('File not open for reading')
-        return self.storage.read_into_stream(self.name).read()
+        content = self.storage.read_into_stream(self.name).read()
+        if 'b' not in self.mode and isinstance(content, bytes):
+            content = content.decode(self.encoding)
+        return content
 
     def exists(self):
         if list(self.storage.list(self.name)):
@@ -69,4 +75,4 @@ class File:
             self.storage._write(data, self.name)
 
     def close(self):
-        pass
+        self.storage._close(self)

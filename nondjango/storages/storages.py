@@ -67,6 +67,7 @@ def _strip_prefix(text, prefix):
 
 
 def _strip_s3_path(path):
+    assert path.startswith('s3://')
     bucket, _, path = _strip_prefix(path, 's3://').partition('/')
     return bucket, path
 
@@ -89,27 +90,62 @@ class BaseStorage:
         except ValueError:
             raise SuspiciousOperation(f"Attempted access to '{name}' denied.")
 
+    def get_valid_name(self, name):
+        """
+        Return a filename, based on the provided filename, that's suitable for
+        use in the target storage system.
+        """
+        walked_path = os.path.relpath(name) if name else ''
+        if walked_path.startswith('../'):
+            raise SuspiciousOperation(f"Attempted access to '{name}' denied.")
+        return walked_path
+
     def read_into_stream(self, file_path, stream=None, mode='r'):
         raise NotImplementedError()
 
-    def open(self, file_name, mode='r'):
-        logger.debug('Reading from %s', file_name)
-        return self.file_class(file_name, storage=self, mode=mode)
+    def open(self, file_name, mode='r') -> File:
+        """Retrieve the specified file from storage."""
+        valid_name = self.get_valid_name(file_name)
+        logger.debug('Opening %s', valid_name)
+        return self.file_class(valid_name, storage=self, mode=mode)
+
+    def _close(self, f):
+        pass
+
+    def delete(self, name):
+        """
+        Delete the specified file from the storage system.
+        """
+        raise NotImplementedError('subclasses of Storage must provide a delete() method')
 
     def _write(self, f, file_name):
         raise NotImplementedError()
 
-    def list(self, path):
+    def listdir(self, path):
+        """
+        List the contents of the specified path. Return a 2-tuple of lists:
+        the first item being directories, the second item being files.
+        """
         raise NotImplementedError()
 
-    def exists(self, path):
-        raise NotImplementedError()
+    def exists(self, name) -> bool:
+        """
+        Return True if a file referenced by the given name already exists in the
+        storage system, or False if the name is available for a new file.
+        """
+        dirname, sep, filename = name.rpartition('/')
+        dirnames, existing_files = self.listdir(dirname)
+        if filename in existing_files:
+            return True
+        return False
 
 
 class S3Storage(BaseStorage):
-    def __init__(self, settings=None):
+    def __init__(self, settings=None, workdir='s3://s3storage/'):
         super(__class__, self).__init__(settings=settings)
         self._resource = None
+        self._bucket_name, self._workdir = _strip_s3_path(workdir)
+        self._workdir = os.path.relpath(self._workdir) if self._workdir else ''
 
     @property
     def s3(self):
@@ -131,6 +167,8 @@ class S3Storage(BaseStorage):
 
     def read_into_stream(self, file_path, stream=None):
         bucket_name, file_name = _strip_s3_path(file_path)
+        assert bucket_name == self._bucket_name
+
         stream = stream or BytesIO()
         bucket = self.s3.Bucket(bucket_name)
         try:
@@ -144,21 +182,51 @@ class S3Storage(BaseStorage):
             else:
                 raise
 
-    def write(self, f, file_name):
-        logger.debug('Writing to %s', file_name)
-        bucket, path_target = _strip_s3_path(file_name)
+    def get_valid_name(self, name):
+        valid_path = super(__class__, self).get_valid_name(name)
+        return 's3://' + f'{self._bucket_name}/{self._workdir}/{valid_path}'.replace('//', '/')
+
+    def _normalize_name(self, name):
+        """
+        Normalizes the name so that paths like /path/to/ignored/../something.txt
+        work. We check to make sure that the path pointed to is not outside
+        the directory specified by the LOCATION setting.
+        """
+        assert name.startswith(f's3://{self._bucket_name}/{self._workdir}/')
+        assert '../' not in name
+        in_bucket_path = name.replace(f's3://{self._bucket_name}/', '')
+        return in_bucket_path
+
+    @property
+    def _bucket(self) -> 's3.Bucket':
         try:
-            bucket = self.s3.create_bucket(Bucket=bucket)
+            return self.s3.create_bucket(Bucket=self._bucket_name)
         except ClientError as e:
             if e.response['Error']['Code'] == 'BucketAlreadyExists':
-                bucket = self.s3.Bucket(bucket)
+                return self.s3.Bucket(self._bucket_name)
             else:
                 raise e
-        bucket.upload_fileobj(f, path_target)
+
+    def _write(self, f, file_name):
+        internal_name = self._normalize_name(file_name)
+        logger.info('Writing to s3://%s/%s', self._bucket_name, internal_name)
+        self._bucket.upload_fileobj(f, internal_name)
+
+    def delete(self, name):
+        internal_name = self.get_valid_name(name)
+        # result = self._bucket.delete_objects(Delete={
+        #     'Objects': [{'Key': internal_name}],
+        # })
+        s3_file = self.s3.Object(self._bucket_name, self._normalize_name(internal_name))
+        result = s3_file.delete()
+        if 'Errors' in result or result['DeleteMarker'] != True:
+            raise RuntimeError(f"Could not delete '{name}': {result}")
+        return result
 
     def list(self, path):
-        logger.debug('Listing %s', path)
-        bucket_name, path = _strip_s3_path(path)
+        valid_name = self.get_valid_name(path)
+        logger.debug('Listing %s', valid_name)
+        bucket_name, path = _strip_s3_path(valid_name)
         bucket = self.s3.Bucket(bucket_name)
         try:
             for obj in bucket.objects.filter(Prefix=path):
@@ -171,7 +239,8 @@ class S3Storage(BaseStorage):
                 raise
     
     def listdir(self, name):
-        path = self._normalize_name(self._clean_name(name))
+        valid_name = self.get_valid_name(name)
+        path = self._normalize_name(valid_name)
         # The path needs to end with a slash, but if the root is empty, leave
         # it.
         if path and not path.endswith('/'):
@@ -179,8 +248,8 @@ class S3Storage(BaseStorage):
 
         directories = []
         files = []
-        paginator = self.connection.meta.client.get_paginator('list_objects')
-        pages = paginator.paginate(Bucket=self.bucket_name, Delimiter='/', Prefix=path)
+        paginator = self.s3.meta.client.get_paginator('list_objects')
+        pages = paginator.paginate(Bucket=self._bucket_name, Delimiter='/', Prefix=path)
         for page in pages:
             for entry in page.get('CommonPrefixes', ()):
                 directories.append(posixpath.relpath(entry['Prefix'], path))
@@ -192,6 +261,10 @@ class S3Storage(BaseStorage):
 class FilesystemStorage(BaseStorage):
     def _validate_path(self, path):
         return True
+
+    def get_valid_name(self, name):
+        valid_path = super(__class__, self).get_valid_name(name)
+        return os.path.join(self._workdir, valid_path).replace('//', '/')
 
     def read_into_stream(self, file_name, stream=None, mode='r'):
         self._validate_path(file_name)
@@ -208,6 +281,9 @@ class FilesystemStorage(BaseStorage):
         prepare_path(file_name)
         open(file_name, 'wb').write(f.read())
 
+    def delete(self, name):
+        return os.unlink(name)
+
     def save(self, name, content):
         path = self._normalize_name(name)
         open(path, 'wb').write(content)
@@ -221,14 +297,6 @@ class FilesystemStorage(BaseStorage):
         else:
             dirnames, filenames = [], []
         return dirnames, filenames
-
-    def exists(self, name):
-        path = self._normalize_name(name)
-        dirname, sep, filename = path.rpartition('/')
-        dirnames, existing_files = self.listdir(dirname)
-        if filename in existing_files:
-            return True
-        return False
 
     def list(self, path):
         self._validate_path(path)
