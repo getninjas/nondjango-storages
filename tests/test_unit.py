@@ -15,14 +15,15 @@ def test_prepare_empty_path():
     utils.prepare_path('')
 
 
-def test_storages_honor_workdir():
+def test_filesystem_storages_honor_workdir():
     storage = storages.TemporaryFilesystemStorage()
-    f = storage.open('test_file.txt', 'w+')
+    filename = 'test_file.txt'
+    f = storage.open(filename, 'w+')
     f.write('test payload')
     f.close()
 
     workdir = storage._workdir
-    assert f.name in os.listdir(workdir), 'File is not on the storage workdir'
+    assert filename in os.listdir(workdir), 'File is not on the storage workdir'
 
 
 @pytest.mark.parametrize("storage_class", [
