@@ -34,10 +34,9 @@ def test_file_read_write(storage_class):
     storage = storage_class()
     assert not storage.exists('test_file.txt')
 
-    f = storage.open('test_file.txt', 'w+')
-    f.write(payload)
-    f.close()
+    with storage.open('test_file.txt', 'w+') as f:
+        f.write(payload)
     assert storage.exists('test_file.txt')
 
-    f2 = storage.open('test_file.txt')
-    assert f2.read() == payload
+    with storage.open('test_file.txt', 'r') as f2:
+        assert f2.read() == payload

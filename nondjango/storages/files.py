@@ -3,6 +3,7 @@ import io
 import codecs
 import difflib
 from tempfile import NamedTemporaryFile
+from contextlib import ContextDecorator
 
 import editor
 
@@ -18,6 +19,13 @@ class File:
         self.mode = mode
         self._storage = storage
         self._stream = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
     @property
     def storage(self):
