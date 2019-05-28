@@ -5,8 +5,6 @@ import difflib
 from tempfile import NamedTemporaryFile
 from contextlib import ContextDecorator
 
-import editor
-
 from . import utils
 
 logger = logging.getLogger(__name__)
